@@ -6,7 +6,7 @@
 
 import os
 import sys
-import argparse
+from argparse import ArgumentParser, RawDescriptionHelpFormatter, REMAINDER
 
 # A wrapper to make "kubectl exec" function as ssh.
 # It's mostly syntactic sugar to convert from OpenSSH's "ssh" syntax
@@ -56,13 +56,14 @@ def parse_args():
     d = ("Execute into a pod on Kubernetes with an OpenSSH-compatible syntax."
          " In other words, make 'kubectl exec' appear and function as a"
          " replacement for the OpenSSH client [the 'ssh' command-line tool],"
-         " and support a compatible syntax.\n\n"
-         "The command to execute on the machine is optional. If omitted,"
+         " and support a compatible syntax."
+         " The command to execute on the machine is optional. If omitted,"
          " %(prog)s will attempt to run '/bin/bash', in an effort to mimic"
          " the default behavior of 'ssh', which is to spawn a login shell"
          " on the remote machine.")
 
-    p = argparse.ArgumentParser(prog=PROG, description=d)
+    p = ArgumentParser(prog=PROG, description=d,
+                       formatter_class=RawDescriptionHelpFormatter)
 
     p.add_argument("-v", dest="verbose", action="store_true",
                    help=("Enable verbose mode. Output diagnostic messages"
@@ -76,9 +77,9 @@ def parse_args():
                    help=("Exec into a specific container, named CONTAINER in"
                          " the pod. If omitted, the underlying 'kubectl exec'"
                          " will exec into the container specified via the"
-                         " 'kubectl.kubernetes.io/default-container'",
-                         " annotation, or the first container in the pod",
-                         " if no such annotation exists. %(prog) maps this"
+                         " 'kubectl.kubernetes.io/default-container'"
+                         " annotation, or the first container in the pod"
+                         " if no such annotation exists. %(prog)s maps this"
                          " option to the '-c' option of 'kubectl exec', see"
                          " the output of 'kubectl help exec' for more"
                          " details."))
@@ -121,7 +122,7 @@ def parse_args():
     tty_group.add_argument("-T", dest="alloc_tty", action="store_false",
                            help="Disable pseudo-terminal allocation.")
 
-    p.add_argument("command", nargs=argparse.REMAINDER,
+    p.add_argument("command", nargs=REMAINDER,
                    help=("The command to run on the container."
                          " Default: /bin/bash, in an effort to mimic default"
                          " 'ssh' behavior, which starts the default login"
