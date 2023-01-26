@@ -56,14 +56,16 @@ def parse_args():
     d = ("Execute into a pod on Kubernetes with an OpenSSH-compatible syntax."
          " In other words, make 'kubectl exec' appear and function as a"
          " replacement for the OpenSSH client [the 'ssh' command-line tool],"
-         " and support a compatible syntax."
-         " The command to execute on the machine is optional. If omitted,"
-         " %(prog)s will attempt to run '/bin/bash', in an effort to mimic"
-         " the default behavior of 'ssh', which is to spawn a login shell"
-         " on the remote machine.")
+         " and support a compatible syntax.\n\n"
+         "By default, %(prog)s will mimic standard 'ssh' behavior and attempt"
+         " to use a shell to run the specified command in the container,"
+         " to ensure compatibility with what callers of 'ssh' expect, and also"
+         " make for a seamless interactive experience. See the 'command',"
+         " 'args', and '--no-shell' arguments below for more details.")
 
     p = ArgumentParser(prog=PROG, description=d,
-                       formatter_class=RawDescriptionHelpFormatter)
+                       formatter_class=RawDescriptionHelpFormatter,
+                       allow_abbrev=False)
 
     p.add_argument("-v", dest="verbose", action="store_true",
                    help=("Enable verbose mode. Output diagnostic messages"
@@ -122,11 +124,49 @@ def parse_args():
     tty_group.add_argument("-T", dest="alloc_tty", action="store_false",
                            help="Disable pseudo-terminal allocation.")
 
-    p.add_argument("command", nargs=REMAINDER,
-                   help=("The command to run on the container."
-                         " Default: /bin/bash, in an effort to mimic default"
-                         " 'ssh' behavior, which starts the default login"
-                         " shell on the remote host."))
+    p.add_argument("--no-shell", dest="no_shell", action="store_true",
+                   default=False,
+                   help=("By default %(prog)s mimics standard 'ssh' behavior"
+                         " and uses a shell to run the specified command in"
+                         " the container. It uses the value of the"
+                         " 'kubectl.kubernetes.io/default-shell' annotation to"
+                         " determine the shell to invoke, or '/bin/sh' if no"
+                         " such annotation exists. To use a shell, %(prog)s"
+                         " concatenates the command and all its arguments into"
+                         " a single space-separated string, and passes this to"
+                         " the shell via its '-c' argument. Use '--no-shell'"
+                         " to disable this behavior, in which case %(prog)s"
+                         " passes the command and all its arguments to"
+                         " `kubectl exec` without any modification. You have"
+                         " to specify a 'command' when using '--no-shell'."))
+
+    p.add_argument("command", nargs="?",
+                   help=("The command to run inside the container. It may be"
+                         " omitted, in which case the default is to start"
+                         " the shell specified via the"
+                         " 'kubectl.kubernetes.io/default-shell' annotation'"
+                         " or '/bin/sh' if no such annotation exists."
+                         " The goal is to mimic standard 'ssh' behavior, which"
+                         " starts your login shell on the remote host, and to"
+                         " make for a seamless interactive experience."))
+
+    # We could use nargs="*" here and specify 'default=None' to workaround
+    # this long-standing upstream bug in Python's argparse, see
+    # https://github.com/python/cpython/issues/72795
+    # *BUT* this would mean we would also be deviating from 'ssh' behavior
+    # and interpreting arguments to the remote command as our own.
+    # So, we *have* to use REMAINDER, and overwrite '.required' manually,
+    # as a workaround. See
+    # https://github.com/arrikto/dev/issues/2256#issuecomment-1405253049
+    remhelp = ("Optional list of arguments to pass to the command to run"
+               " inside the container. Note %(prog)s will stop parsing its own"
+               " arguments after encountering the 'command' positional"
+               " argument, so you can specify arguments to the remote command"
+               " here freely without having to use '--' in the command line"
+               " explicitly. Again, the goal is to mimic standard 'ssh'"
+               " behavior and to make for a seamless interactive experience.")
+    rem = p.add_argument("args", nargs=REMAINDER, help=remhelp)
+    rem.required = False
 
     args = p.parse_args()
 
@@ -182,16 +222,50 @@ def parse_args():
         raise ValueError("If specified, port must be a positive integer.")
 
     if args.alloc_tty is None:
-        args.alloc_tty = True if args.command == [] else False
+        args.alloc_tty = True if args.command is None else False
 
-    if args.command == []:
-        args.command = ["/bin/bash"]
+    # At this point, we're trying to emulate the combined behavior
+    # of the OpenSSH client and the OpenSSH server wrt handling command-line
+    # arguments and using the login shell on the remote to execute the remote
+    # command.
+    #
+    # OpenSSH server will just run the login shell when it has received no
+    # specific command to run, see
+    # https://github.com/openssh/openssh-portable/blob/c3ffb54b4fc5e608206037921db6ccbc2f5ab25f/session.c#L1679
+    # otherwise, it will pass the remote command to the login shell via its
+    # '-c' argument, see
+    # https://github.com/openssh/openssh-portable/blob/c3ffb54b4fc5e608206037921db6ccbc2f5ab25f/session.c#L1706
+    if args.command is None:
+        if args.no_shell:
+            raise ValueError("You have to specify 'command' when using"
+                             " '--no-shell'")
+        cmdline = ["/bin/sh"]   # FIXME: Respect 'kubectl/default-shell'
+    else:
+        if not args.no_shell:
+            # We're going to emulate the standard behavior of the 'ssh' client
+            # and concatenate the command and full argument list into a single
+            # space separated-string, so we can pass it to the shell via its
+            # '-c' argument. See
+            # https://github.com/openssh/openssh-portable/blob/35253af01d8c0ab444c8377402121816e71c71f5/ssh.c#L1130
+            # for how OpenSSH does this.
+            cmdline = ["/bin/sh", "-c"]   # FIXME: Respect 'kubectl/default-shell'
+            cmdline.append(" ".join([args.command] + args.args))
+        else:
+            # At this point we're no longer trying to emulate
+            # 'ssh' behavior. We will pass the full argument list to
+            # 'kubectl exec' cleanly.
+            cmdline = [args.command] + args.args
 
+    # Delete all arguments which we never expect to access directly again,
+    # and enhance the args Namespace with new, derived ones.
+    del args.args
+    del args.command
     del args.destination
     del args.port
     args.namespace = namespace
     args.pod = pod
     args.container = container
+    args.cmdline = cmdline
 
     return vars(args)
 
@@ -206,16 +280,16 @@ def construct_cmdline_kubectl(args):
         cmdline.append("-i")
 
     if args["container"]:
-        cmdline += ["-c", args["container"]]
+        cmdline.extend(["-c", args["container"]])
 
     if args["namespace"]:
-        cmdline += ["-n", args["namespace"]]
+        cmdline.extend(["-n", args["namespace"]])
 
     cmdline.append(args["pod"])
 
     cmdline.append("--")
 
-    cmdline += args["command"]
+    cmdline.extend(args["cmdline"])
 
     return cmdline
 
