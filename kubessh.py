@@ -6,7 +6,8 @@
 
 import os
 import sys
-from argparse import ArgumentParser, RawDescriptionHelpFormatter, REMAINDER
+import textwrap
+from argparse import ArgumentParser, HelpFormatter , REMAINDER
 
 # A wrapper to make "kubectl exec" function as ssh.
 # It's mostly syntactic sugar to convert from OpenSSH's "ssh" syntax
@@ -49,6 +50,62 @@ def parse_ssh_dest(dest, port_allowed=False):
 
 ### FIXME: Add unittests for parse_ssh_dest()
 
+class HonorNewlinesHelpFormatter(HelpFormatter):
+    """A HelpFormatter for argparse which actually honors newlines.
+
+    The default help formatter wraps text nicely, but doesn't honor explicit
+    line breaks. Using RawDescriptionHelpFormatter honors newlines in the
+    description, but doesn't wrap text at all, so it's not really a solution.
+
+    This formatter will wrap text at the proper width, but work in paragraphs,
+    separated by newline characters.
+
+    This HelpFormatter overrides internal methods in the HelpFormatter class.
+    argparse only considers the names of the classes public. 🙄
+    For details, see:
+    https://github.com/python/cpython/blob/main/Lib/argparse.py
+
+    We'll have to bend the rules a bit and override some private methods,
+    to make help output actually readable.
+    """
+    def _fill_text(self, text, width, indent):
+        """This method seems to apply to the text of the description."""
+        tw = textwrap
+
+        # Indent the text, keep all newlines
+        texti = tw.indent(tw.dedent(text), indent)
+
+        # Split the text into individual paragraphs
+        textl = texti.splitlines()
+
+        # Wrap each line individually, and return the final result
+        return "\n".join([tw.fill(line, width) for line in textl])
+
+    def _split_lines(self, text, width):
+        """This method seems to apply to the help text of individual args."""
+        tw = textwrap
+
+        # Dedent all text, keep all newlines
+        textd = tw.dedent(text)
+
+        # Split the text into individual paragraphs
+        textl = textd.splitlines()
+
+        # Wrap each line individually.
+        # We need to return the final result as a flattened list of lines.
+        # Note we return *lines* in a list, not the final joined result,
+        # since we expect the caller to indent the lines appropriately.
+
+        # Start with a list of lists, one sublist per paragraph
+        textpar = [tw.fill(line,width).split("\n") for line in textl]
+
+        # Then flatten it and return the final result
+        flat_lines = []
+        for paragraph in textpar:
+            for line in paragraph:
+                flat_lines.append(line)
+
+        return flat_lines
 
 def parse_args():
     """Parse command-line arguments as arguments to the OpenSSH client."""
@@ -64,7 +121,7 @@ def parse_args():
          " 'args', and '--no-shell' arguments below for more details.")
 
     p = ArgumentParser(prog=PROG, description=d,
-                       formatter_class=RawDescriptionHelpFormatter,
+                       formatter_class=HonorNewlinesHelpFormatter,
                        allow_abbrev=False)
 
     p.add_argument("-v", dest="verbose", action="store_true",
@@ -102,16 +159,16 @@ def parse_args():
                          " which may be specified as"
                          " container@pod[.namespace],"
                          " or a URI of the form"
-                         " ssh://[container@]pod[.namespace][:port]."
-                         " Note: Kubernetes does not allow namespace names to"
+                         " ssh://[container@]pod[.namespace][:port].\n"
+                         "Note: Kubernetes does not allow namespace names to"
                          " contain dots, but it *does* allow pod names to"
                          " contain dots, so you have to add the namespace"
                          " explicitly, if you wish to exec into a pod with a"
-                         " dot in its name."
-                         " Note: It's forbidden to set the container name"
+                         " dot in its name.\n"
+                         "Note: It's forbidden to set the container name"
                          " both via '-l' and as part of 'destination'"
-                         " at the same time."
-                         " Note: %(prog)s will ignore 'port' if specified"
+                         " at the same time.\n"
+                         "Note: %(prog)s will ignore 'port' if specified"
                          " [but it must be a valid port number]."))
 
     tty_group = p.add_mutually_exclusive_group()
@@ -159,10 +216,11 @@ def parse_args():
     # as a workaround. See
     # https://github.com/arrikto/dev/issues/2256#issuecomment-1405253049
     remhelp = ("Optional list of arguments to pass to the command to run"
-               " inside the container. Note %(prog)s will stop parsing its own"
+               " inside the container.\n"
+               "Note: %(prog)s will stop parsing its own"
                " arguments after encountering the 'command' positional"
                " argument, so you can specify arguments to the remote command"
-               " here freely without having to use '--' in the command line"
+               " here freely, without having to use '--' in the command line"
                " explicitly. Again, the goal is to mimic standard 'ssh'"
                " behavior and to make for a seamless interactive experience.")
     rem = p.add_argument("args", nargs=REMAINDER, help=remhelp)
