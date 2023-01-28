@@ -7,7 +7,7 @@
 import os
 import sys
 import textwrap
-from argparse import ArgumentParser, HelpFormatter , REMAINDER
+from argparse import ArgumentParser, HelpFormatter, REMAINDER
 
 # A wrapper to make "kubectl exec" function as ssh.
 # It's mostly syntactic sugar to convert from OpenSSH's "ssh" syntax
@@ -23,6 +23,35 @@ def parse_ssh_dest(dest, port_allowed=False):
     Parse a 'destination' argument either as '[user@]hostname' or
     as '[user@]hostname[:port]' depending on the value of 'port_allowed'.
 
+    Usage examples/tests:
+
+    >>> parse_ssh_dest("host")
+    (None, 'host', None)
+    >>> parse_ssh_dest("host:1234", port_allowed=True)
+    (None, 'host', 1234)
+    >>> parse_ssh_dest("host:1234", port_allowed=False)
+    (None, 'host:1234', None)
+    >>> parse_ssh_dest("user@host:1234")
+    ('user', 'host:1234', None)
+    >>> parse_ssh_dest("user@host:1234", port_allowed=True)
+    ('user', 'host', 1234)
+    >>> parse_ssh_dest("@pod")
+    Traceback (most recent call last):
+    ...
+    ValueError: Specified 'destination' contains '@' but container name is empty.
+    >>> parse_ssh_dest("container@")
+    Traceback (most recent call last):
+    ...
+    ValueError: Specified 'destination' contains '@' but pod name is empty.
+    >>> parse_ssh_dest("host:1:a", port_allowed=True)
+    Traceback (most recent call last):
+    ...
+    ValueError: If specified, port must be an integer, and cannot be empty.
+    >>> parse_ssh_dest("user@host@somethingelse")
+    Traceback (most recent call last):
+    ...
+    ValueError: Specified 'destination' must contain at most one '@' character.
+
     """
     if "@" in dest:
         s = dest.split("@")
@@ -31,6 +60,14 @@ def parse_ssh_dest(dest, port_allowed=False):
                    " character.")
             raise ValueError(msg)
         user, hostname = s[0], s[1]
+        if not user:
+            msg = ("Specified 'destination' contains '@' but container name"
+                   " is empty.")
+            raise ValueError(msg)
+        if not hostname:
+            msg = ("Specified 'destination' contains '@' but pod name"
+                   " is empty.")
+            raise ValueError(msg)
     else:
         user = None
         hostname = dest
@@ -43,12 +80,13 @@ def parse_ssh_dest(dest, port_allowed=False):
             try:
                 port = int(":".join(s[1:]))
             except ValueError:
+                # Note use of PEP-0409 syntax, to suppress the original
+                # exception, since we've handled it fully.
                 raise ValueError("If specified, port must be an integer,"
-                                 " and cannot be empty.")
+                                 " and cannot be empty.") from None
 
     return user, hostname, port
 
-### FIXME: Add unittests for parse_ssh_dest()
 
 class HonorNewlinesHelpFormatter(HelpFormatter):
     """A HelpFormatter for argparse which actually honors newlines.
@@ -97,7 +135,7 @@ class HonorNewlinesHelpFormatter(HelpFormatter):
         # since we expect the caller to indent the lines appropriately.
 
         # Start with a list of lists, one sublist per paragraph
-        textpar = [tw.fill(line,width).split("\n") for line in textl]
+        textpar = [tw.fill(line, width).split("\n") for line in textl]
 
         # Then flatten it and return the final result
         flat_lines = []
@@ -106,6 +144,7 @@ class HonorNewlinesHelpFormatter(HelpFormatter):
                 flat_lines.append(line)
 
         return flat_lines
+
 
 def parse_args():
     """Parse command-line arguments as arguments to the OpenSSH client."""
@@ -246,7 +285,7 @@ def parse_args():
     dest = args.destination
     if dest.startswith("ssh://"):
         user, hostname, port = parse_ssh_dest(dest[len("ssh://"):],
-                                          port_allowed=True)
+                                              port_allowed=True)
     else:
         user, hostname, port = parse_ssh_dest(dest, port_allowed=False)
 
@@ -297,16 +336,16 @@ def parse_args():
         if args.no_shell:
             raise ValueError("You have to specify 'command' when using"
                              " '--no-shell'")
-        cmdline = ["/bin/sh"]   # FIXME: Respect 'kubectl/default-shell'
+        cmdline = ["/bin/sh"]   # FIXME: Respect 'k/default-shell'
     else:
         if not args.no_shell:
             # We're going to emulate the standard behavior of the 'ssh' client
             # and concatenate the command and full argument list into a single
             # space separated-string, so we can pass it to the shell via its
             # '-c' argument. See
-            # https://github.com/openssh/openssh-portable/blob/35253af01d8c0ab444c8377402121816e71c71f5/ssh.c#L1130
+            # https://github.com/openssh/openssh-portable/blob/35253af01d8c0ab444c8377402121816e71c71f5/ssh.c#L1130  # noqa: E501
             # for how OpenSSH does this.
-            cmdline = ["/bin/sh", "-c"]   # FIXME: Respect 'kubectl/default-shell'
+            cmdline = ["/bin/sh", "-c"]  # FIXME: Respect 'k/default-shell'
             cmdline.append(" ".join([args.command] + args.args))
         else:
             # At this point we're no longer trying to emulate
