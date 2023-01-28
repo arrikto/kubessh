@@ -50,11 +50,11 @@ is on purpose, do not modify. -->
 * **Get a shell in a specific container of a pod in a non-default namespace.**  
   With kubectl:
      ```console
-     $ kubectl exec -c mycontainer -n mynamespace mypod -- /bin/bash
+     $ kubectl exec -c mycontainer -n myspace mypod -- /bin/bash
      ```
   With KubeSSH:
      ```console
-     $ kubessh mycontainer@mypod.mynamespace
+     $ kubessh mycontainer@mypod.myspace
      ```
 
 * **Run a more complex command pipeline on the container.**  

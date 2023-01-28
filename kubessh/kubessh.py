@@ -3,21 +3,21 @@
 # kubessh.py
 #
 # Copyright © 2023 Arrikto Inc.  All Rights Reserved.
+"""A wrapper to make "kubectl exec" function as ssh..
+
+It's mostly syntactic sugar to convert from OpenSSH's "ssh" syntax
+to "kubectl exec" syntax.
+"""
+
+__version__ = "0.0.1"
 
 import os
 import sys
 import textwrap
 from argparse import ArgumentParser, HelpFormatter, REMAINDER
 
-# A wrapper to make "kubectl exec" function as ssh.
-# It's mostly syntactic sugar to convert from OpenSSH's "ssh" syntax
-# to "kubectl exec" syntax.
 
-PROG = "kubessh"
-VERSION = "0.0.1"
-
-
-def parse_ssh_dest(dest, port_allowed=False):
+def _parse_ssh_dest(dest, port_allowed=False):
     """Parse a 'destination' argument in one of two supported formats.
 
     Parse a 'destination' argument either as '[user@]hostname' or
@@ -25,29 +25,29 @@ def parse_ssh_dest(dest, port_allowed=False):
 
     Usage examples/tests:
 
-    >>> parse_ssh_dest("host")
+    >>> _parse_ssh_dest("host")
     (None, 'host', None)
-    >>> parse_ssh_dest("host:1234", port_allowed=True)
+    >>> _parse_ssh_dest("host:1234", port_allowed=True)
     (None, 'host', 1234)
-    >>> parse_ssh_dest("host:1234", port_allowed=False)
+    >>> _parse_ssh_dest("host:1234", port_allowed=False)
     (None, 'host:1234', None)
-    >>> parse_ssh_dest("user@host:1234")
+    >>> _parse_ssh_dest("user@host:1234")
     ('user', 'host:1234', None)
-    >>> parse_ssh_dest("user@host:1234", port_allowed=True)
+    >>> _parse_ssh_dest("user@host:1234", port_allowed=True)
     ('user', 'host', 1234)
-    >>> parse_ssh_dest("@pod")
+    >>> _parse_ssh_dest("@pod")
     Traceback (most recent call last):
     ...
     ValueError: Specified 'destination' contains '@' but container name is empty.
-    >>> parse_ssh_dest("container@")
+    >>> _parse_ssh_dest("container@")
     Traceback (most recent call last):
     ...
     ValueError: Specified 'destination' contains '@' but pod name is empty.
-    >>> parse_ssh_dest("host:1:a", port_allowed=True)
+    >>> _parse_ssh_dest("host:1:a", port_allowed=True)
     Traceback (most recent call last):
     ...
     ValueError: If specified, port must be an integer, and cannot be empty.
-    >>> parse_ssh_dest("user@host@somethingelse")
+    >>> _parse_ssh_dest("user@host@somethingelse")
     Traceback (most recent call last):
     ...
     ValueError: Specified 'destination' must contain at most one '@' character.
@@ -146,9 +146,13 @@ class HonorNewlinesHelpFormatter(HelpFormatter):
         return flat_lines
 
 
-def parse_args():
-    """Parse command-line arguments as arguments to the OpenSSH client."""
+def _get_parser(sysargv, omit_destination=False):
+    """Create an instance of ArgumentParser.
 
+    This is a helper function to parse_args(),
+    since we need to parse arguments twice, with slightly different
+    parsers, to account for some broken argparse behavior wrt REMAINDER.
+    """
     d = ("Execute into a pod on Kubernetes with an OpenSSH-compatible syntax."
          " In other words, make 'kubectl exec' appear and function as a"
          " replacement for the OpenSSH client [the 'ssh' command-line tool],"
@@ -159,7 +163,7 @@ def parse_args():
          " make for a seamless interactive experience. See the 'command',"
          " 'args', and '--no-shell' arguments below for more details.")
 
-    p = ArgumentParser(prog=PROG, description=d,
+    p = ArgumentParser(prog=sysargv[0], description=d,
                        formatter_class=HonorNewlinesHelpFormatter,
                        allow_abbrev=False)
 
@@ -167,8 +171,9 @@ def parse_args():
                    help=("Enable verbose mode. Output diagnostic messages"
                          " to stderr."))
 
-    p.add_argument("-V", dest="version", action="store_true",
-                   help="Output version information to stderr, and exit.")
+    p.add_argument("-V", dest="version", action="version",
+                   version="KubeSSH version %s" % __version__,
+                   help="Output version information to stdout, and exit.")
 
     p.add_argument("-l", metavar="CONTAINER_NAME", dest="container",
                    action="store",
@@ -193,22 +198,27 @@ def parse_args():
                          " PORT, but -- if specified -- it must be a valid"
                          " port number."))
 
-    p.add_argument("destination",
-                   help=("Exec into the specified destination,"
-                         " which may be specified as"
-                         " container@pod[.namespace],"
-                         " or a URI of the form"
-                         " ssh://[container@]pod[.namespace][:port].\n"
-                         "Note: Kubernetes does not allow namespace names to"
-                         " contain dots, but it *does* allow pod names to"
-                         " contain dots, so you have to add the namespace"
-                         " explicitly, if you wish to exec into a pod with a"
-                         " dot in its name.\n"
-                         "Note: It's forbidden to set the container name"
-                         " both via '-l' and as part of 'destination'"
-                         " at the same time.\n"
-                         "Note: %(prog)s will ignore 'port' if specified"
-                         " [but it must be a valid port number]."))
+    # We add this argument conditionally,based on the value of
+    # omit_destination, so we can return two slightly different parsers,
+    # and workaround a REMAINDER-related bug in argparse, see parse_args()
+    # below.
+    if not omit_destination:
+        p.add_argument("destination",
+                       help=("Exec into the specified destination,"
+                             " which may be specified as"
+                             " container@pod[.namespace],"
+                             " or a URI of the form"
+                             " ssh://[container@]pod[.namespace][:port].\n"
+                             "Note: Kubernetes does not allow namespace names"
+                             " to contain dots, but it *does* allow pod names"
+                             " to contain dots, so you have to set the "
+                             " namespace explicitly, if you wish to exec into"
+                             " a pod with a dot in its name.\n"
+                             "Note: It's forbidden to set the container name"
+                             " both via '-l' and as part of 'destination'"
+                             " at the same time.\n"
+                             "Note: %(prog)s will ignore 'port' if specified"
+                             " [but it must be a valid port number]."))
 
     tty_group = p.add_mutually_exclusive_group()
     tty_group.add_argument("-t", dest="alloc_tty", action="store_true",
@@ -262,10 +272,160 @@ def parse_args():
                " here freely, without having to use '--' in the command line"
                " explicitly. Again, the goal is to mimic standard 'ssh'"
                " behavior and to make for a seamless interactive experience.")
-    rem = p.add_argument("args", nargs=REMAINDER, help=remhelp)
+    rem = p.add_argument("rem", nargs=REMAINDER, help=remhelp)
     rem.required = False
 
-    args = p.parse_args()
+    return p
+
+
+def parse_args(sysargv=sys.argv):
+    """Parse command-line arguments as arguments to the OpenSSH client.
+
+    Use argparse to parse command-line arguments as arguments to the OpenSSH
+    client. KubeSSH aims to be a drop-in replacement for SSH, so we're trying
+    to follow its behavior as closely as possible, whenever it makes sense.
+
+    Note argparse has a particularly buggy implementation of REMAINDER,
+    which makes it very difficult to use without extensive patching.
+    See links to GitHub issues below for more details.
+
+    Usage examples/tests:
+    >>> from pprint import pprint as p
+    >>> p(parse_args("kubessh mypod".split()))
+    {'alloc_tty': True,
+     'cmdline': ['/bin/sh'],
+     'container': None,
+     'namespace': None,
+     'no_shell': False,
+     'pass_stdin': True,
+     'pod': 'mypod',
+     'verbose': False}
+    >>> p(parse_args("kubessh mypod -v".split()))
+    {'alloc_tty': True,
+     'cmdline': ['/bin/sh'],
+     'container': None,
+     'namespace': None,
+     'no_shell': False,
+     'pass_stdin': True,
+     'pod': 'mypod',
+     'verbose': True}
+    >>> p(parse_args("kubessh container@mypod.myspace".split()))
+    {'alloc_tty': True,
+     'cmdline': ['/bin/sh'],
+     'container': 'container',
+     'namespace': 'myspace',
+     'no_shell': False,
+     'pass_stdin': True,
+     'pod': 'mypod',
+     'verbose': False}
+    >>> p(parse_args("kubessh ssh://container@mypod.myspace:2222".split()))
+    {'alloc_tty': True,
+     'cmdline': ['/bin/sh'],
+     'container': 'container',
+     'namespace': 'myspace',
+     'no_shell': False,
+     'pass_stdin': True,
+     'pod': 'mypod',
+     'verbose': False}
+    >>> p(parse_args("kubessh -Tvp2222 mypod".split()))
+    {'alloc_tty': False,
+     'cmdline': ['/bin/sh'],
+     'container': None,
+     'namespace': None,
+     'no_shell': False,
+     'pass_stdin': True,
+     'pod': 'mypod',
+     'verbose': True}
+    >>> p(parse_args("kubessh ssh://container@mypod.myspace:-1".split()))
+    Traceback (most recent call last):
+    ...
+    ValueError: If specified, port must be a positive integer.
+    >>> p(parse_args("kubessh -v mypod ls".split()))
+    {'alloc_tty': False,
+     'cmdline': ['/bin/sh', '-c', 'ls'],
+     'container': None,
+     'namespace': None,
+     'no_shell': False,
+     'pass_stdin': True,
+     'pod': 'mypod',
+     'verbose': True}
+    >>> p(parse_args("kubessh mypod -v ls --no-shell".split()))
+    {'alloc_tty': False,
+     'cmdline': ['/bin/sh', '-c', 'ls --no-shell'],
+     'container': None,
+     'namespace': None,
+     'no_shell': False,
+     'pass_stdin': True,
+     'pod': 'mypod',
+     'verbose': True}
+    >>> p(parse_args("kubessh mypod --no-shell /bin/ls -v /dir".split()))
+    {'alloc_tty': False,
+     'cmdline': ['/bin/ls', '-v', '/dir'],
+     'container': None,
+     'namespace': None,
+     'no_shell': True,
+     'pass_stdin': True,
+     'pod': 'mypod',
+     'verbose': False}
+    """
+
+    # The implementation of REMAINDER in argparse leaves a lot to be desired...
+    #
+    # There seems to be no way to convince it to only activate at the *second*
+    # positional argument, since we have two positional arguments in our case,
+    # destination and command.
+    # For example, it breaks for this use case: "mypod -v cmd":
+    # "-v" becomes the first entry in REMAINDER, when argparse should parse
+    # "-v" as an optional argument, consume "cmd" as the second positional
+    # argument, then assing things to REMAINDER.
+    # On the other hand, "-v mypod cmd arg1" works, and correctly assigns
+    # "cmd" to the second positional argument, and "arg1" to REMAINDER.
+    #
+    # Given upstream hasn't been willing to solve REMAINDER-related bugs,
+    # [see https://github.com/python/cpython/issues/72795,
+    # https://github.com/python/cpython/issues/61252], and has actually
+    # removed all REMAINDER-related documentation, let's work around this.
+
+    # First parse with our full parser, which contains all arguments.
+    pmain = _get_parser(sysargv)
+    args = pmain.parse_args(sysargv[1:])
+
+    # If command is None, but there is something in REMAINDER [args.rem],
+    # we're in trouble. argparse has assigned an option to the first item in
+    # REMAINDER.
+    if args.command is None and args.rem != []:
+        # If these assertions don't hold, something has really gone south
+        # so stop early, and report this.
+        if not args.rem[0].startswith("-") or len(args.rem) >= len(sysargv):
+            msg = ("This is a bug. Please report this:"
+                   " Failed to parse arguments: Sysargv: %s" %
+                   repr(sysargv))
+            raise AssertionError(msg)
+
+        # At this point, we know there are arguments we need to parse
+        # in REMAINDER. We also know we have already consumed the first
+        # positional argument [destination], so we have to determine which
+        # items at the start of REMAINDER are actual arguments we should
+        # process.
+
+        # Parse the REMAINDER, with a parser which has all arguments
+        # *but* destination, and come up with REMAINDER2 [args2.rem]
+        psec = _get_parser(sysargv, omit_destination=True)
+        args2 = psec.parse_args(args.rem)
+
+        # Treat the 'command' positional arg as part of args2.rem, to simplify
+        if args2.command is not None:
+            args2.rem = [args2.command] + args2.rem
+
+        # Any arguments in the original REMAINDER that are not part
+        # of REMAINDER2 are arguments we should be consuming.
+        # So, move them to the front of the original command line,
+        # and parse again, with our full parser.
+        final_sysargv = ([sysargv[0]] +
+                         args.rem[0: len(args.rem) - len(args2.rem)] +
+                         sysargv[1: len(sysargv) - len(args.rem)] +
+                         args2.rem)
+        args = pmain.parse_args(final_sysargv[1:])
 
     container = vars(args).get("container")
 
@@ -284,10 +444,10 @@ def parse_args():
     # ssh://[user@]hostname[:port] in the OpenSSH command line.
     dest = args.destination
     if dest.startswith("ssh://"):
-        user, hostname, port = parse_ssh_dest(dest[len("ssh://"):],
-                                              port_allowed=True)
+        user, hostname, port = _parse_ssh_dest(dest[len("ssh://"):],
+                                               port_allowed=True)
     else:
-        user, hostname, port = parse_ssh_dest(dest, port_allowed=False)
+        user, hostname, port = _parse_ssh_dest(dest, port_allowed=False)
 
     if args.port is not None and port is not None:
         raise ValueError("Cannot specify port number via 'destination'"
@@ -346,16 +506,16 @@ def parse_args():
             # https://github.com/openssh/openssh-portable/blob/35253af01d8c0ab444c8377402121816e71c71f5/ssh.c#L1130  # noqa: E501
             # for how OpenSSH does this.
             cmdline = ["/bin/sh", "-c"]  # FIXME: Respect 'k/default-shell'
-            cmdline.append(" ".join([args.command] + args.args))
+            cmdline.append(" ".join([args.command] + args.rem))
         else:
             # At this point we're no longer trying to emulate
             # 'ssh' behavior. We will pass the full argument list to
             # 'kubectl exec' cleanly.
-            cmdline = [args.command] + args.args
+            cmdline = [args.command] + args.rem
 
     # Delete all arguments which we never expect to access directly again,
     # and enhance the args Namespace with new, derived ones.
-    del args.args
+    del args.rem
     del args.command
     del args.destination
     del args.port
@@ -394,12 +554,8 @@ def construct_cmdline_kubectl(args):
 def main():
     args = parse_args()
 
-    if args["version"]:
-        sys.stderr.write("%s version %s\n" % (PROG, VERSION))
-        return 0
-
     if args["verbose"]:
-        sys.stderr.write(("*** Arguments: \n    " +
+        sys.stderr.write(("*** Parsed args to %s: \n    " % sys.argv[0] +
                           "\n    ".join(["%s: %s" % (k, v)
                                          for k, v in args.items()]) + "\n"))
 
