@@ -39,31 +39,31 @@ KubeSSH simplifies interactively executing into a container. For example:
 is on purpose, do not modify. -->
 * **Start a shell.**  
   With kubectl:
-     ```bash
+     ```console
      $ kubectl exec -it mypod -- /bin/sh
      ```
   With KubeSSH:
-     ```bash
+     ```console
      $ kubessh mypod
      ```
 
 * **Get a shell in a specific container of a pod in a non-default namespace.**  
   With kubectl:
-     ```bash
+     ```console
      $ kubectl exec -c mycontainer -n mynamespace mypod -- /bin/bash
      ```
   With KubeSSH:
-     ```bash
+     ```console
      $ kubessh mycontainer@mypod.mynamespace
      ```
 
 * **Run a more complex command pipeline on the container.**  
   With kubectl:
-     ```bash
+     ```console
      $ kubectl exec mypod -- /bin/bash -c 'mkdir /a/dir && touch /a/dir/file'
      ```
   With KubeSSH:
-     ```bash
+     ```console
      $ kubessh mypod 'mkdir /a/dir && touch /a/dir/file'
      ```
 
@@ -101,3 +101,30 @@ default to simplify its use, especially in interactive scenarios:
   you can run pretty complex pipelines directly from the command prompt, but
   you can disable this behavior if you need to have fine-grained control over
   the actual argument list, see the `--no-shell` argument.
+
+
+Install
+-------
+
+KubeSSH is currently under heavy development.
+Here is how to install KubeSSH:
+
+1. Clone this repository:
+      ```console
+      $ git clone https://github.com/...
+      ```
+2. Create a new virtualenv for development:
+      ```console
+      $ mkvirtualenv -p python3 kubessh
+      ```
+3. Install the code in development mode:
+      ```console
+      $ python setup.py develop
+      ```
+4. Confirm the `kubessh` script is now available:
+      ```console
+      $ kubessh --help
+      usage: kubessh [-h] [-v] [-V] [-l CONTAINER_NAME] [-n] [-p PORT] [-t | -T]
+                     [--no-shell]
+                     destination [command] ...
+      ```
