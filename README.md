@@ -107,7 +107,8 @@ Install
 -------
 
 KubeSSH is currently under heavy development.
-Here is how to install KubeSSH:
+This section describes how to install it in development mode, so you can make
+changes to the code and see it run immediately.
 
 1. Clone this repository:
       ```console
@@ -127,4 +128,24 @@ Here is how to install KubeSSH:
       usage: kubessh [-h] [-v] [-V] [-l CONTAINER_NAME] [-n] [-p PORT] [-t | -T]
                      [--no-shell]
                      destination [command] ...
+      ```
+
+Run tests
+---------
+
+This section describes how to run coding style and unit tests for KubeSSH.
+
+1. Install the `flake8` and `pytest` packages:
+      ```console
+      $ pip install flake8 pytest
+      ```
+
+2. Run coding style tests:
+      ```console
+      $ flake8
+      ```
+
+3. Run unit tests:
+      ```console
+      $ pytest
       ```
