@@ -13,8 +13,12 @@ __version__ = "0.0.1"
 
 import os
 import sys
+import shutil
 import textwrap
 from argparse import ArgumentParser, HelpFormatter, REMAINDER
+
+KUBESSH_ARGS = ["--no-shell", "--ssh-passthrough", "--ssh-cmd", "--ssh-test"]
+KUBESSH_MAGIC_PREFIX = "k8s_"
 
 
 def _parse_ssh_dest(dest, port_allowed=False):
@@ -246,6 +250,61 @@ def _get_parser(sysargv, omit_destination=False):
                          " `kubectl exec` without any modification. You have"
                          " to specify a 'command' when using '--no-shell'."))
 
+    # If we're being run as 'ssh', --ssh-passthrough is the default
+    ssh_passthrough_default = (os.path.basename(sysargv[0]) == "ssh")
+    p.add_argument("--ssh-passthrough", dest="ssh_passthrough",
+                   action="store_true", default=ssh_passthrough_default,
+                   help=(("Instruct %(prog)s to exec the real 'ssh' executable"
+                          " [see '--ssh-cmd' below], and pass the full"
+                          " command line to it, excluding KubeSSH-specific"
+                          " arguments [%(args)s], *except* when the hostname"
+                          " starts with the magic prefix '%(prefix)s'. This"
+                          " enables using KubeSSH as your everyday 'ssh' tool"
+                          " for all kinds of remote connections, both for"
+                          " standard SSH and for exec-ing into Kubernetes"
+                          " pods via 'kubectl exec'.\n"
+                          "Assuming you have already configured 'ssh' to point"
+                          " to %(prog)s [see the documentation for details],"
+                          " then running 'ssh myhost' will fall back to the"
+                          " standard 'ssh' client, while running"
+                          " 'ssh %(prefix)smypod' will pass control to"
+                          " 'kubectl exec' to run the specified command on"
+                          " the Kubernetes pod.\n"
+                          "Default: %(default)s, because this program"
+                          " is being run as '%(argv0)s'.") %
+                         {"prog": "%(prog)s",
+                          "args": ",".join(KUBESSH_ARGS),
+                          "prefix": KUBESSH_MAGIC_PREFIX,
+                          "default": ssh_passthrough_default,
+                          "argv0": sysargv[0]}))
+
+    # Decide on the default location of the real SSH binary
+    if ssh_passthrough_default:
+        ssh_cmd_default = os.path.join(os.path.dirname(sysargv[0]),
+                                       "ssh.real")
+    else:
+        ssh_cmd_default = "ssh"
+    p.add_argument("--ssh-cmd", dest="ssh_cmd", metavar="SSH_CMD",
+                   action="store", default=ssh_cmd_default,
+                   help=(("Assume the real 'ssh' executable in your system is"
+                          " SSH_CMD. When SSH passthrough mode is enabled,"
+                          " %(prog)s will execute SSH_CMD and pass the full"
+                          " command line to it, see --ssh-passthrough above.\n"
+                          "If SSH_CMD is not an absolute path, %(prog)s will"
+                          " search $PATH to determine its actual location."
+                          "Default: %(default)s, because this program"
+                          " is being run as '%(argv0)s'.") %
+                         {"prog": "%(prog)s",
+                          "default": ssh_cmd_default,
+                          "argv0": sysargv[0]}))
+
+    p.add_argument("--ssh-test", dest="ssh_test",
+                   action="store_true", default=False,
+                   help=("Output version information for KubeSSH"
+                         " and pass control to the real SSH binary [see"
+                         " '--ssh-cmd' above] to verify SSH passthrough mode"
+                         " works correctly."))
+
     p.add_argument("command", nargs="?",
                    help=("The command to run inside the container. It may be"
                          " omitted, in which case the default is to start"
@@ -290,6 +349,7 @@ def parse_args(sysargv=sys.argv):
     See links to GitHub issues below for more details.
 
     Usage examples/tests:
+
     >>> from pprint import pprint as p
     >>> p(parse_args("kubessh mypod".split()))
     {'alloc_tty': True,
@@ -299,6 +359,9 @@ def parse_args(sysargv=sys.argv):
      'no_shell': False,
      'pass_stdin': True,
      'pod': 'mypod',
+     'ssh_cmd': 'ssh',
+     'ssh_passthrough': False,
+     'ssh_test': False,
      'verbose': False}
     >>> p(parse_args("kubessh mypod -v".split()))
     {'alloc_tty': True,
@@ -308,6 +371,9 @@ def parse_args(sysargv=sys.argv):
      'no_shell': False,
      'pass_stdin': True,
      'pod': 'mypod',
+     'ssh_cmd': 'ssh',
+     'ssh_passthrough': False,
+     'ssh_test': False,
      'verbose': True}
     >>> p(parse_args("kubessh container@mypod.myspace".split()))
     {'alloc_tty': True,
@@ -317,6 +383,9 @@ def parse_args(sysargv=sys.argv):
      'no_shell': False,
      'pass_stdin': True,
      'pod': 'mypod',
+     'ssh_cmd': 'ssh',
+     'ssh_passthrough': False,
+     'ssh_test': False,
      'verbose': False}
     >>> p(parse_args("kubessh ssh://container@mypod.myspace:2222".split()))
     {'alloc_tty': True,
@@ -326,6 +395,9 @@ def parse_args(sysargv=sys.argv):
      'no_shell': False,
      'pass_stdin': True,
      'pod': 'mypod',
+     'ssh_cmd': 'ssh',
+     'ssh_passthrough': False,
+     'ssh_test': False,
      'verbose': False}
     >>> p(parse_args("kubessh -Tvp2222 mypod".split()))
     {'alloc_tty': False,
@@ -335,8 +407,15 @@ def parse_args(sysargv=sys.argv):
      'no_shell': False,
      'pass_stdin': True,
      'pod': 'mypod',
+     'ssh_cmd': 'ssh',
+     'ssh_passthrough': False,
+     'ssh_test': False,
      'verbose': True}
-    >>> p(parse_args("kubessh ssh://container@mypod.myspace:-1".split()))
+    >>> p(parse_args("kubessh ssh://container@mypod.myspace:0".split()))
+    Traceback (most recent call last):
+    ...
+    ValueError: If specified, port must be a positive integer.
+    >>> p(parse_args("kubessh -p 0 ssh://container@mypod.myspace".split()))
     Traceback (most recent call last):
     ...
     ValueError: If specified, port must be a positive integer.
@@ -348,6 +427,9 @@ def parse_args(sysargv=sys.argv):
      'no_shell': False,
      'pass_stdin': True,
      'pod': 'mypod',
+     'ssh_cmd': 'ssh',
+     'ssh_passthrough': False,
+     'ssh_test': False,
      'verbose': True}
     >>> p(parse_args("kubessh mypod -v ls --no-shell".split()))
     {'alloc_tty': False,
@@ -357,6 +439,9 @@ def parse_args(sysargv=sys.argv):
      'no_shell': False,
      'pass_stdin': True,
      'pod': 'mypod',
+     'ssh_cmd': 'ssh',
+     'ssh_passthrough': False,
+     'ssh_test': False,
      'verbose': True}
     >>> p(parse_args("kubessh mypod --no-shell /bin/ls -v /dir".split()))
     {'alloc_tty': False,
@@ -366,7 +451,30 @@ def parse_args(sysargv=sys.argv):
      'no_shell': True,
      'pass_stdin': True,
      'pod': 'mypod',
+     'ssh_cmd': 'ssh',
+     'ssh_passthrough': False,
+     'ssh_test': False,
      'verbose': False}
+    >>> p(parse_args("kubessh --ssh-test user@host".split()))
+    Traceback (most recent call last):
+    ...
+    ValueError: Cannot test SSH passthrough mode because it's not enabled. See the documentation for '--ssh-passthrough' for more details.
+    >>> p(parse_args("ssh --ssh-test user@host".split()))
+    {'alloc_tty': True,
+     'cmdline': ['/bin/sh'],
+     'container': 'user',
+     'namespace': None,
+     'no_shell': False,
+     'pass_stdin': True,
+     'pod': 'host',
+     'ssh_cmd': 'ssh.real',
+     'ssh_passthrough': True,
+     'ssh_test': True,
+     'verbose': False}
+    >>> p(parse_args("ssh --ssh-test user@k8s_host".split()))
+    Traceback (most recent call last):
+    ...
+    ValueError: Cannot test SSH passthrough mode because it's not enabled. See the documentation for '--ssh-passthrough' for more details.
     """
 
     # The implementation of REMAINDER in argparse leaves a lot to be desired...
@@ -468,13 +576,14 @@ def parse_args(sysargv=sys.argv):
     del hostname
 
     # Final outputs, verify correctness
-    port = args.port or port
-    container = args.container or user
+    port = args.port if args.port is not None else port
+    container = args.container if args.container is not None else user
 
     if not pod:
         raise ValueError("You must specify a pod name via 'destination'.")
     if container is not None and container == "":
         raise ValueError("If specified, container name cannot be empty.")
+    #import pdb; pdb.set_trace()
     if port is not None and port <= 0:
         raise ValueError("If specified, port must be a positive integer.")
 
@@ -512,6 +621,20 @@ def parse_args(sysargv=sys.argv):
             # 'ssh' behavior. We will pass the full argument list to
             # 'kubectl exec' cleanly.
             cmdline = [args.command] + args.rem
+
+    # SSH passthrough mode:
+    # Disable it *only* if our destination pod matches the magic prefix,
+    # and strip the prefix from the name of the destination pod.
+    if pod.startswith(KUBESSH_MAGIC_PREFIX):
+        args.ssh_passthrough = False
+        pod = pod[len(KUBESSH_MAGIC_PREFIX):]
+
+    if args.ssh_test:
+        if not args.ssh_passthrough:
+            msg = ("Cannot test SSH passthrough mode because it's not enabled."
+                   " See the documentation for '--ssh-passthrough' for more"
+                   " details.")
+            raise ValueError(msg)
 
     # Delete all arguments which we never expect to access directly again,
     # and enhance the args Namespace with new, derived ones.
@@ -551,8 +674,90 @@ def construct_cmdline_kubectl(args):
     return cmdline
 
 
+def _ssh_passthrough_args(sysargv=sys.argv):
+    """Construct the final list of arguments to pass through to SSH.
+
+    Work with argv directly to ensure we pass all arguments verbatim,
+    but make sure to remove all KubeSSH-specific options.
+
+    Treat '--ssh-cmd' specially, because it's the only option which
+    accepts an argument.
+
+    Usage examples / tests:
+    >>> _ssh_passthrough_args("kubessh --ssh-passthrough".split())
+    ['kubessh']
+    >>> _ssh_passthrough_args("kubessh --ssh-cmd /usr/bin/ssh user@host -p 2222".split())
+    ['kubessh', 'user@host', '-p', '2222']
+    """
+    # Note: We need to overwrite argv[0] for the real SSH later on,
+    # since SSH uses it in its error output, and seeing 'kubessh' there is
+    # extremely confusing.
+    ssh_args = [sysargv[0]]
+    skip_arg = False
+    for i in range(1, len(sysargv)):
+        if skip_arg:
+            skip_arg = False
+            continue
+        if sysargv[i] not in KUBESSH_ARGS:
+            ssh_args.append(sysargv[i])
+        # Special case: the only --ssh-* option that accepts an argument
+        elif sysargv[i] == "--ssh-cmd":
+            skip_arg = True
+
+    return ssh_args
+
+
+def ssh_passthrough(args):
+    """Run the real SSH executable in passthrough mode.
+
+    Work with sys.argv directly, to ensure we pass
+    the full argument list with minimal manipulation.
+    """
+
+    # Decide on the final argument list for the real SSH
+    ssh_args = _ssh_passthrough_args()
+
+    # Decide on the location of the real SSH
+    kubessh_abspath = os.path.realpath(sys.argv[0])
+    ssh_cmd = args["ssh_cmd"]
+    if os.path.isabs(ssh_cmd):
+        ssh_abspath = os.path.realpath(ssh_cmd)
+    else:
+        ssh_abspath = os.path.realpath(shutil.which(ssh_cmd))
+
+    # Refuse to run the real SSH if it seems to be pointing back to us,
+    # this is most probably a misconfiguration.
+    if ssh_abspath == kubessh_abspath:
+        msg = (("Refusing to run the real SSH executable, because it seems"
+                " to be pointing to myself. My path: %s, real SSH path: %s.") %
+               (kubessh_abspath, ssh_abspath))
+        raise RuntimeError(msg)
+
+    # If in test mode, output version information for KubeSSH,
+    # and manipulate the argument list to SSH so it outputs
+    # version information as well.
+    if args["ssh_test"]:
+        msg = ("KubeSSH version %s [location: %s]. About to execute: %s\n" %
+               (__version__, kubessh_abspath, ssh_abspath))
+        sys.stderr.write(msg)
+        ssh_args.insert(1, "-V")
+
+    # Finally, do it!
+    # Exec the real SSH, pass the filtered argument through,
+    # and also allow it to inherit our environment.
+    # Make sure to overwrite its argv[0] to its actual absolute path.
+    os.execv(ssh_abspath, [ssh_abspath] + ssh_args[1:])
+
+
 def main():
-    args = parse_args()
+    try:
+        args = parse_args()
+    except ValueError as ve:
+        sys.stderr.write("argument parsing failed: %s\n" % str(ve))
+        return 1
+
+    if args["ssh_passthrough"]:
+        ssh_passthrough(args)
 
     if args["verbose"]:
         sys.stderr.write(("*** Parsed args to %s: \n    " % sys.argv[0] +

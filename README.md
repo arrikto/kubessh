@@ -1,5 +1,4 @@
-KubeSSH
-=======
+# KubeSSH
 
 KubeSSH brings an SSH-like experience to running commands on Kubernetes pods.
 
@@ -20,9 +19,9 @@ other words it makes it appear and function as a replacement for the OpenSSH
 client, by making it support a compatible syntax and most commonly-used
 command-line arguments.
 
-<!--- In fact, you can even use it as your everyday `ssh`
-tool, to exec into remote hosts and Kubernetes containers seamlessly, with a
-single, simple syntax. -->
+In fact, you can even use it as your everyday `ssh` tool, to exec into remote
+hosts and Kubernetes containers seamlessly, with a single, simple syntax.
+For more details, see section [Use as ssh](#-use-as-ssh) below.
 
 **IMPORTANT:** This *still* uses `kubectl exec` underneath, so it doesn't
 expose any extra services to the network [e.g., `sshd`]. It just connects to
@@ -30,8 +29,7 @@ the Kubernetes API server directly, and uses the exact same authorization
 mechanism, Kubernetes RBAC.
 
 
-Interactive use
----------------
+## Interactive use
 
 KubeSSH simplifies interactively executing into a container. For example:
 
@@ -67,8 +65,7 @@ is on purpose, do not modify. -->
      $ kubessh mypod 'mkdir /a/dir && touch /a/dir/file'
      ```
 
-Cool hacks
-----------
+## Cool hacks
 
 KubeSSH enables a set of cool hacks when combined with tools that already know
 h ow to exec into a remote location using SSH. For example:
@@ -80,8 +77,7 @@ h ow to exec into a remote location using SSH. For example:
   required.
 
 
-Design
-------
+## Design
 
 KubeSSH mimics standard `ssh` behavior and implements a set of heuristics by
 default to simplify its use, especially in interactive scenarios:
@@ -103,8 +99,7 @@ default to simplify its use, especially in interactive scenarios:
   the actual argument list, see the `--no-shell` argument.
 
 
-Install
--------
+## Install
 
 KubeSSH is currently under heavy development.
 This section describes how to install it in development mode, so you can make
@@ -130,8 +125,8 @@ changes to the code and see it run immediately.
                      destination [command] ...
       ```
 
-Run tests
----------
+
+## Run tests
 
 This section describes how to run coding style and unit tests for KubeSSH.
 
@@ -149,3 +144,104 @@ This section describes how to run coding style and unit tests for KubeSSH.
       ```console
       $ pytest
       ```
+
+
+## Use as ssh
+
+KubeSSH supports being your single 'ssh' executable via the `--ssh-passthrough`
+argument. In SSH passthrough mode, KubeSSH will exec the standard 'ssh'
+executable in your $PATH, and pass the full command line to it, excluding
+KubeSSH-specific arguments [`--no-shell`, `--ssh-passthrough`].
+
+KubeSSH will only activate if the hostname starts with the magic prefix `k8s_`.
+This enables using KubeSSH as your everyday `ssh` tool for all kinds of remote
+connections, both for standard SSH and for exec-int into Kubernetes pods via
+`kubectl exec`.
+
+There are at least two ways to enable this mode:
+
+* **Option 1: Shell alias.** You wil need to set an alias in your shell.
+* **Option 2: Two symbolic links.** You will need to configure two symbolic
+  links, `ssh`, `ssh.real` in a directory that lives in your `$PATH` before the
+  current location of `ssh`.
+
+Option 2 enables `git`, `rsync` or any other tool to work directly with your
+Kubernetes pods, without any extra configuration.
+
+
+### Option 1: Shell alias
+
+For this option, you will define a new shell alias, `ssh` pointing to KubeSSH.
+How to define a new alias depends on your shell. The following instructions
+work for Bash, instructions for other shells are more than welcome.
+
+**Bash:** Edit `.bashrc` and add a line to configure `ssh` as an
+alias, pointing to `kubessh --ssh-passthrough`:
+  ```bash
+  alias ssh='kubessh --ssh-passthrough'
+  ```
+Restart your shell, and verify the alias is there:
+   ```console
+   $ type ssh
+   ssh is aliased to `kubessh --ssh-passthrough'
+   ```
+
+Finally, confirm everything is working properly:
+   ```console
+   $ ssh -V
+   $ ssh --ssh-test user@host
+   KubeSSH version 0.0.1 [location: /home/user/venvs/py38/bin/kubessh]. About to execute: /usr/bin/ssh
+   OpenSSH_8.2p1 Ubuntu-4ubuntu0.5, OpenSSL 1.1.1f  31 Mar 2020
+
+   ```
+
+
+### Option 2: Two symbolic links
+
+For this option, you'll create two new symbolic links in a directory which
+exists in your `$PATH`, before the current location of your `ssh` binary.
+
+First, confirm the current location of `ssh`:
+   ```console
+   $ which ssh
+   /usr/bin/ssh
+   ```
+
+In this example, it lives under `/usr/bin`, so you must create any symbolic
+links in a directory which lives before `/usr/bin` in your `$PATH`.
+
+Inspect the value of `$PATH` to decide on a directory. A good choice would be
+`$HOME/bin`, or `$VIRTUAL_ENV/bin`, if using a Python virtual environment.
+
+Decide on a choice and set `$BINDIR` accordingly:
+   ```console
+   $ echo $PATH
+   $ ls -ld $VIRTUAL_ENV/bin
+   $ ls -ld $HOME/bin
+   $ BINDIR=$HOME/bin
+   ```
+
+Finally, create a symbolic link called `ssh.real` pointing to the location of
+your original `ssh`, and a symbolic link called `ssh` pointing to `kubessh`:
+   ```console
+   $ cd $BINDIR
+   $ which ssh
+   $ ln -s $(which ssh) ssh.real
+   $ ln -s $(which kubessh) ssh
+   $ hash -r
+   ```
+
+It should look similar to this:
+   ```console
+   $ ls -l ssh*
+   lrwxrwxrwx 1 user user 42 Jan 29 00:48 ssh -> /home/user/venvs/py38/bin/kubessh*
+   lrwxrwxrwx 1 user user 12 Jan 29 00:48 ssh.real -> /usr/bin/ssh*
+   ```
+
+Finally, confirm everything is working properly:
+   ```console
+   $ ssh -V
+   $ ssh --ssh-test user@host
+   KubeSSH version 0.0.1 [location: /home/user/venvs/py38/bin/kubessh]. About to execute: /usr/bin/ssh
+   OpenSSH_8.2p1 Ubuntu-4ubuntu0.5, OpenSSL 1.1.1f  31 Mar 2020
+   ```
