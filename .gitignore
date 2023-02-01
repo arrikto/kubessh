@@ -1,0 +1,5 @@
+# Ignore byte-compiled files, caches, packaging artifacts
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
